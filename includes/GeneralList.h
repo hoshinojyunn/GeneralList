@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -54,27 +55,41 @@ struct Printer<T, std::void_t<decltype(std::cout << std::declval<T>())>>{
 
 //比较要定义为类模板（方法模板无法偏特化）
 #define DEFAULT_CMP(name, opt)                                              \
-template<class T, class = std::void_t<>>                                    \
+template<class T1, class T2, class = std::void_t<>>                                    \
 struct default_##name{                                                      \
-    static bool compare(const T&t1, const T&t2){                            \
-        throw exception::compare_exception{typeid(T), typeid(T), #opt};     \
+    static bool compare(const T1&t1, const T2&t2){                            \
+        throw exception::compare_exception{typeid(T1), typeid(T2), #opt};     \
     }                                                                       \
 };                                                                          \
-template<class T>                                                           \
+template<class T1, class T2>                                                           \
 struct default_##name<                                                      \
-        T,                                                                  \
-        std::void_t<decltype(std::declval<T>() opt std::declval<T>())>      \
+        T1, T2,                                                                   \
+        std::void_t<decltype(std::declval<T1>() opt std::declval<T2>())>      \
     >{                                                                      \
-    static bool compare(const T&t1, const T&t2){                            \
+    static bool compare(const T1&t1, const T2&t2){                            \
         return t1 opt t2;                                                   \
     }                                                                       \
 };                                                                           
 
-DEFAULT_CMP(equal, ==)
+// DEFAULT_CMP(equal, ==)
 DEFAULT_CMP(greater, >)
 DEFAULT_CMP(less, <)
 DEFAULT_CMP(greater_equal, >=)
 DEFAULT_CMP(less_equal, <=)
+DEFAULT_CMP(equal, ==)
+
+// 特化char *const与std::string的比较
+// #define STR_CMP(name, opt) \
+// template <> \
+// struct default_##name<char*const, std::string, \
+// std::void_t<decltype(std::declval<char*const>() opt std::declval<std::string>())> \
+// {   \
+//     static bool compare(char*const t1, const std::string&t2){                            \
+//         return t1 opt t2.c_str();                                                   \
+//     }  \
+// }
+
+
 #undef DEFAULT_CMP
 
 template<class T>
@@ -128,23 +143,26 @@ struct Element{
         }
         std::string Id() const override {
             return std::format("{}", Type().name());
-        };
+        }
         std::ostream &Print(std::ostream&out) const override {
             return tool::Printer<T>::DefaultPrint(out, val, Id());
         }
+
         #define CMP_IMPL(name, cmp_name, opt) \
         bool name(const Holder&other) const override { \
             const auto&l_ti = Type();                   \
             const auto&r_ti = other.Type();             \
+            auto val1 = dynamic_cast<const HolderImpl<BaseType<T>>&>(other).val; \
             return l_ti!=r_ti ? throw exception::compare_exception(l_ti, r_ti, #opt) : \
-            tool::default_##cmp_name<T>::compare(val, dynamic_cast<const HolderImpl<T>&>(other).val); \
+            tool::default_##cmp_name<T, decltype(val1)>::compare(val, val1); \
         }
         
-        CMP_IMPL(Equal, equal, ==)
+        // CMP_IMPL(Equal, equal, ==)
         CMP_IMPL(Greater, greater, >)
         CMP_IMPL(Less, less, <)
         CMP_IMPL(GreaterEqual, greater_equal, >=)
         CMP_IMPL(LessEqual, less_equal, <=)
+        CMP_IMPL(Equal, equal, ==)
         #undef CMP_IMPL
 
         std::shared_ptr<Holder> Clone() const override{
@@ -161,11 +179,11 @@ struct Element{
 
     // 当T类型与Element不同时 启用该构造函数 进行其他类型到Element的转换
     template<class T, class = std::enable_if_t<!std::is_same_v<BaseType<T>, Element>>>
-    Element(T&&t) : holder_(std::make_shared<HolderImpl<T>>(std::forward<T>(t))){}
+    Element(T&&t) : holder_(std::make_shared<HolderImpl<BaseType<T>>>(std::forward<T>(t))){}
     
     template<class T, class = std::enable_if_t<!std::is_same_v<BaseType<T>, Element>>>
     Element& operator=(T&&t){
-        Reset(), holder_ = std::make_shared<HolderImpl<T>>(std::forward<T>(t));
+        Reset(), holder_ = std::make_shared<HolderImpl<BaseType<T>>>(std::forward<T>(t));
         return *this;
     }
     Element(const Element&other) : holder_(other.Clone()) {}
@@ -202,14 +220,14 @@ struct Element{
     template<class T, class = 
         std::enable_if_t<!std::is_same_v<BaseType<T>, Element>>
     >
-    auto ElementCast() const -> T {
-        return GetHolderImpl<T>().val;
+    auto ElementCast() const -> BaseType<T> {
+        return std::move(GetHolderImpl<T>().val);
     }
 
     template<class T, class = 
         std::enable_if_t<std::is_same_v<BaseType<T>, Element>>
     >
-    auto ElementCast() -> T {
+    auto ElementCast() -> BaseType<T> {
         return *this;
     }
 
@@ -261,11 +279,11 @@ private:
         return HasValue()? holder_.value()->Clone() : nullptr;
     }
     template<class T>
-    auto GetHolderImpl() const -> const HolderImpl<T> {
+    auto GetHolderImpl() const -> const HolderImpl<BaseType<T>> {
         if(!HasValue())
             throw exception::element_access_exception();
         
-        auto holder_impl = std::dynamic_pointer_cast<HolderImpl<T>>(holder_.value());
+        auto holder_impl = std::dynamic_pointer_cast<HolderImpl<BaseType<T>>>(holder_.value());
         if(!holder_impl)
             throw exception::element_cast_exception();
         return std::move(*holder_impl);
@@ -295,6 +313,14 @@ struct GeneralList : public std::vector<Element>{
         }
         out << "]";
         return out;
+    }
+
+    Element& operator[](std::size_t index){
+        return std::vector<Element>::operator[](index);
+    }
+
+    const Element& operator[](std::size_t index) const {
+        return std::vector<Element>::operator[](index);
     }
 
 private:
